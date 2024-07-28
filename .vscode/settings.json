@@ -1,0 +1,8 @@
+{
+    "python.analysis.diagnosticSeverityOverrides": {
+        "python.linting.pylintEnabled": true,
+        "python.linting.pylintArgs": [
+        "--enable=W0614"
+        ]
+    }
+}
