@@ -14,7 +14,10 @@ import re
 from streamlit_chat import message
 from docx import Document
 from docx.shared import Inches
-from autocorrect import Speller
+from nltk.tokenize import word_tokenize
+from nltk.stem import PorterStemmer
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 
 # Directory containing the PDFs
 base_directory = r"C:\Users\sande\OneDrive\Desktop\PYTHON PROJECTS\KtuAssistantBot\KTUEngineeringNotes"
@@ -22,13 +25,26 @@ notes = r"C:\Users\sande\OneDrive\Desktop\PYTHON PROJECTS\KtuAssistantBot\notes"
 
 # Download NLTK data
 nltk.download("punkt")
+stemmer = PorterStemmer()
+def correct_spelling_with_google_genai(text):
+    try:
+        model = genai.GenerativeModel(
+            "gemini-1.5-flash",
+            safety_settings={
+                HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_LOW_AND_ABOVE,
+                HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_LOW_AND_ABOVE,
+            },
+            generation_config=genai.GenerationConfig(temperature=0)
+        )
+        response = model.generate_content(
+            contents=f"Correct the spelling errors in the following text. Do not add any additional text or sentences:\n\n{text}",
+        )
+        corrected_text = response.text
+    except Exception as e:
+        st.error(f"An error occurred while correcting spelling: {e}")
+        corrected_text = text
 
-def correct_spelling(text):
-    spell = Speller()
-    # Correct each word
-    corrected_words = spell.autocorrect_sentence(text)
-    # Join the corrected words back into a string
-    return corrected_words
+    return corrected_text
 
 def convert_latex_to_text(latex_text):
     superscript_map = {
@@ -116,13 +132,27 @@ def extract_text_and_images(pdf_path):
 
     return text, images, image_info
 
-
+def preprocess_text(text):
+    """Tokenize and stem the text."""
+    tokens = word_tokenize(text.lower())
+    return ' '.join(stemmer.stem(token) for token in tokens if token.isalpha())
 def search_text_in_pdf(query, text):
+    preprocessed_query = preprocess_text(query)
+    
+    # Tokenize the text and preprocess
     sentences = nltk.sent_tokenize(text)
-    result_sentences = [
-        sentence for sentence in sentences if query.lower() in sentence.lower()
-    ]
-    return " ".join(result_sentences)
+    preprocessed_sentences = [preprocess_text(sentence) for sentence in sentences]
+
+    # Use TF-IDF Vectorizer to transform text
+    vectorizer = TfidfVectorizer()
+    vectors = vectorizer.fit_transform([preprocessed_query] + preprocessed_sentences)
+    
+    # Compute cosine similarity
+    cosine_sim = cosine_similarity(vectors[0:1], vectors[1:])
+    relevant_indices = cosine_sim[0].argsort()[-5:][::-1]  # Get top 5 relevant sentences
+    
+    relevant_sentences = [sentences[i] for i in relevant_indices]
+    return " ".join(relevant_sentences)
 
 
 def resize_image(image, max_width=900, max_height=600):
@@ -162,11 +192,11 @@ def refine_text_with_google_genai(query, result_text):
             safety_settings={
                 HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_LOW_AND_ABOVE,
                 HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_LOW_AND_ABOVE,
-            },generation_config=genai.GenerationConfig(temperature=0)
+            },generation_config=genai.GenerationConfig(temperature=2)
         )
         response = model.generate_content(
             
-            contents=f"Refine the following text to focus on the user query '{query}' and remove any unrelated information:\n\n{result_text}",
+            contents=f"Refine the following text to focus on the user query '{query}' and if derivation contain show each step and remove any unrelated information:\n\n{result_text}",
         )
         refined_text = response.text
     except Exception as e:
@@ -274,24 +304,19 @@ def main():
     def find_relevant_images(query, pdf_files, all_image_info):
         relevant_images = []
         seen_images = set()
-        query = query.lower()
+        query = query.lower().strip()  # Normalize query: lower case and remove extra spaces
 
-        # Iterate through each PDF file
         for pdf_file in pdf_files:
             pdf_path = os.path.join(subject_directory, pdf_file)
             doc = fitz.open(pdf_path)
 
-            # Process each image info (page number and index)
             for page_num, img_index in all_image_info:
                 if page_num < len(doc):
                     page = doc.load_page(page_num)
-                    page_text = page.get_text("text")
+                    page_text = page.get_text("text").lower()  # Convert page text to lowercase
 
-                    # Check if the query is present in the surrounding text of the image
-                    if any(
-                        query in sentence.lower()
-                        for sentence in nltk.sent_tokenize(page_text)
-                    ):
+                    # Check if the query is present in the page text
+                    if query in page_text:
                         image_list = page.get_images(full=True)
                         if img_index < len(image_list):
                             base_image = doc.extract_image(image_list[img_index][0])
@@ -782,7 +807,7 @@ def main():
         # Add your text input and button
         with text_col:
             textcrt = st.text_input("Enter Your Topic Heading:", key="stTextInput")
-            user_query = correct_spelling(text=textcrt)
+            user_query = correct_spelling_with_google_genai(text=textcrt)
         with button_col:
             btn = st.button("Send", key="stButton")
         with backcol:
