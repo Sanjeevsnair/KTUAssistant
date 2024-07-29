@@ -20,7 +20,9 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 # Directory containing the PDFs
-base_directory = r"C:\Users\sande\OneDrive\Desktop\PYTHON PROJECTS\KtuAssistantBot\KTUEngineeringNotes"
+current_file_directory = os.path.dirname(os.path.abspath(__file__))
+relative_path = "KTUEngineeringNotes"
+base_directory = os.path.join(current_file_directory, relative_path)
 notes = r"C:\Users\sande\OneDrive\Desktop\PYTHON PROJECTS\KtuAssistantBot\notes"
 
 # Download NLTK data
