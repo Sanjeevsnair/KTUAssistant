@@ -25,6 +25,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the rest of the application code into the container at /app
 COPY . /app/
 
+RUN mkdir -p /.streamlit
+COPY config.toml /.streamlit/config.toml
+
 # Expose the port that the app runs on
 EXPOSE 8501
 
