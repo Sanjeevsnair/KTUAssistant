@@ -7,18 +7,20 @@ ENV PYTHONUNBUFFERED=1
 # Create and set the working directory
 WORKDIR /app
 
-# Install system dependencies (if any)
+# Install system dependencies
 RUN apt-get update \
     && apt-get install -y \
     build-essential \
     libpq-dev \
+    pkg-config \
+    libcairo2-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy the requirements file into the container at /app
 COPY requirements.txt /app/
 
 # Install Python dependencies
-RUN pip install -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the rest of the application code into the container at /app
 COPY . /app/
