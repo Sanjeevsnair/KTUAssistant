@@ -1,3 +1,2 @@
 [server]
-# Increase server timeout
-maxTimeout = 180
+maxTimeout = 360
