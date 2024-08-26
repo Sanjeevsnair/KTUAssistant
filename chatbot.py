@@ -18,6 +18,10 @@ from nltk.tokenize import word_tokenize
 from nltk.stem import PorterStemmer
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+import concurrent.futures
+import streamlit as st
+import requests
+from io import BytesIO
 
 # Directory containing the PDFs
 current_file_directory = os.path.dirname(os.path.abspath(__file__))
@@ -28,6 +32,8 @@ notes = r"C:\Users\sande\OneDrive\Desktop\PYTHON PROJECTS\KtuAssistantBot\notes"
 # Download NLTK data
 nltk.download("punkt")
 stemmer = PorterStemmer()
+
+
 def correct_spelling_with_google_genai(text):
     try:
         model = genai.GenerativeModel(
@@ -36,7 +42,7 @@ def correct_spelling_with_google_genai(text):
                 HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_LOW_AND_ABOVE,
                 HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_LOW_AND_ABOVE,
             },
-            generation_config=genai.GenerationConfig(temperature=0)
+            generation_config=genai.GenerationConfig(temperature=0),
         )
         response = model.generate_content(
             contents=f"Correct the spelling errors in the following text. Do not add any additional text or sentences:\n\n{text}",
@@ -47,6 +53,7 @@ def correct_spelling_with_google_genai(text):
         corrected_text = text
 
     return corrected_text
+
 
 def convert_latex_to_text(latex_text):
     superscript_map = {
@@ -108,8 +115,6 @@ def extract_text_and_images(pdf_path):
     doc = fitz.open(pdf_path)
     text = ""
     images = []
-    image_info = []
-
     for page_num in range(len(doc)):
         page = doc.load_page(page_num)
         text += page.get_text("text")
@@ -119,28 +124,26 @@ def extract_text_and_images(pdf_path):
             base_image = doc.extract_image(xref)
             image_bytes = base_image["image"]
             image = Image.open(io.BytesIO(image_bytes))
+            images.append(resize_image(image))
+    return text, images
 
-            # Debugging: Print image size
-            print(f"Original size (width x height): {image.width} x {image.height}")
 
-            if (
-                not (image.width == 500 and image.height == 500)
-                and not (image.width == 932 and image.height == 67)
-                and not (image.width == 468 and image.height == 99)
-                and not (image.width == 109 and image.height == 23)
-            ):
-                images.append(image)
-                image_info.append((page_num, img_index))
+def load_pdf_data(pdf_path):
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        future = executor.submit(extract_text_and_images, pdf_path)
+        text, images = future.result()  # Expect only two values
+    return text, images
 
-    return text, images, image_info
 
 def preprocess_text(text):
     """Tokenize and stem the text."""
     tokens = word_tokenize(text.lower())
-    return ' '.join(stemmer.stem(token) for token in tokens if token.isalpha())
+    return " ".join(stemmer.stem(token) for token in tokens if token.isalpha())
+
+
 def search_text_in_pdf(query, text):
     preprocessed_query = preprocess_text(query)
-    
+
     # Tokenize the text and preprocess
     sentences = nltk.sent_tokenize(text)
     preprocessed_sentences = [preprocess_text(sentence) for sentence in sentences]
@@ -148,11 +151,13 @@ def search_text_in_pdf(query, text):
     # Use TF-IDF Vectorizer to transform text
     vectorizer = TfidfVectorizer()
     vectors = vectorizer.fit_transform([preprocessed_query] + preprocessed_sentences)
-    
+
     # Compute cosine similarity
     cosine_sim = cosine_similarity(vectors[0:1], vectors[1:])
-    relevant_indices = cosine_sim[0].argsort()[-5:][::-1]  # Get top 5 relevant sentences
-    
+    relevant_indices = cosine_sim[0].argsort()[-5:][
+        ::-1
+    ]  # Get top 5 relevant sentences
+
     relevant_sentences = [sentences[i] for i in relevant_indices]
     return " ".join(relevant_sentences)
 
@@ -160,9 +165,7 @@ def search_text_in_pdf(query, text):
 def resize_image(image, max_width=900, max_height=600):
     original_width, original_height = image.size
     aspect_ratio = original_width / original_height
-    print(
-        f"Resizing image from ({original_width}, {original_height})"
-    )  # Debugging output
+    new_width, new_height = original_width, original_height
     if original_width > max_width or original_height > max_height:
         if aspect_ratio > 1:
             new_width = max_width
@@ -171,7 +174,6 @@ def resize_image(image, max_width=900, max_height=600):
             new_height = max_height
             new_width = int(max_height * aspect_ratio)
         image = image.resize((new_width, new_height), Image.LANCZOS)
-        print(f"Resized to ({new_width}, {new_height})")  # Debugging output
     return image
 
 
@@ -194,10 +196,10 @@ def refine_text_with_google_genai(query, result_text):
             safety_settings={
                 HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_LOW_AND_ABOVE,
                 HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_LOW_AND_ABOVE,
-            },generation_config=genai.GenerationConfig(temperature=2)
+            },
+            generation_config=genai.GenerationConfig(temperature=2),
         )
         response = model.generate_content(
-            
             contents=f"Refine the following text to focus on the user query '{query}' and if derivation contain show each step and remove any unrelated information:\n\n{result_text}",
         )
         refined_text = response.text
@@ -306,7 +308,9 @@ def main():
     def find_relevant_images(query, pdf_files, all_image_info):
         relevant_images = []
         seen_images = set()
-        query = query.lower().strip()  # Normalize query: lower case and remove extra spaces
+        query = (
+            query.lower().strip()
+        )  # Normalize query: lower case and remove extra spaces
 
         for pdf_file in pdf_files:
             pdf_path = os.path.join(subject_directory, pdf_file)
@@ -315,7 +319,9 @@ def main():
             for page_num, img_index in all_image_info:
                 if page_num < len(doc):
                     page = doc.load_page(page_num)
-                    page_text = page.get_text("text").lower()  # Convert page text to lowercase
+                    page_text = page.get_text(
+                        "text"
+                    ).lower()  # Convert page text to lowercase
 
                     # Check if the query is present in the page text
                     if query in page_text:
@@ -346,17 +352,28 @@ def main():
                                     and not (image.width == 96 and image.height == 84)
                                     and not (image.width == 252 and image.height == 284)
                                     and not (image.width == 146 and image.height == 164)
-                                    and not (image.width == 1293 and image.height == 290)
-                                    and not (image.width == 1291 and image.height == 219)
+                                    and not (
+                                        image.width == 1293 and image.height == 290
+                                    )
+                                    and not (
+                                        image.width == 1291 and image.height == 219
+                                    )
                                     and not (image.width == 947 and image.height == 269)
-                                    and not (image.width == 1242 and image.height == 161)
-                                    and not (image.width == 1344 and image.height == 329)
+                                    and not (
+                                        image.width == 1242 and image.height == 161
+                                    )
+                                    and not (
+                                        image.width == 1344 and image.height == 329
+                                    )
                                     and not (image.width == 808 and image.height == 401)
-                                    and not (image.width == 1344 and image.height == 318)
-                                    and not (image.width == 1341 and image.height == 212)
+                                    and not (
+                                        image.width == 1344 and image.height == 318
+                                    )
+                                    and not (
+                                        image.width == 1341 and image.height == 212
+                                    )
                                     and not (image.width == 370 and image.height == 193)
                                     and not (image.width == 503 and image.height == 83)
-                                    
                                 ):
                                     relevant_images.append(image)
 
@@ -757,10 +774,11 @@ def main():
 
         for pdf_file in pdf_files:
             pdf_path = os.path.join(subject_directory, pdf_file)
-            text, images, image_info = extract_text_and_images(pdf_path)
+
+            text, images = extract_text_and_images(pdf_path)
+
             aggregated_text += text
             all_images.extend(images)
-            all_image_info.extend(image_info)
 
         text_col, button_col, backcol = st.columns(
             [4, 0.58, 0.9], vertical_alignment="bottom"
@@ -815,7 +833,10 @@ def main():
         with backcol:
             if st.button("New Chat", key="stbackbtn", on_click=newchat):
                 pass
-        st.markdown('<div class="fixed-text">KTUASSISTANT can make mistakes.</div>',unsafe_allow_html=True)
+        st.markdown(
+            '<div class="fixed-text">KTUASSISTANT can make mistakes.</div>',
+            unsafe_allow_html=True,
+        )
         if btn:
             if user_query:
                 st.session_state.messages.append(
@@ -851,23 +872,21 @@ def main():
                     {"role": "bot", "content": response_message}
                 )
                 st.session_state.loading = False
-                
 
         # Display chat history
         for msg in st.session_state.messages:
             unique_key = str(uuid.uuid4())
             if msg["role"] == "user":
-                message(msg["content"], is_user=True,key=unique_key)
+                message(msg["content"], is_user=True, key=unique_key)
             else:
-                message(msg["content"], is_user=False, allow_html=True,key=unique_key)
-                
+                message(msg["content"], is_user=False, allow_html=True, key=unique_key)
 
         if st.session_state.loading:
             st.spinner("Bot is processing your request...")
         times = datetime.now()
         formatted = times.strftime("%Y%m%d%H%M%S")
         if btn:
-                    st.divider()
+            st.divider()
         if btn:
             doc_bytes = save_chat_as_word()
             st.download_button(
@@ -876,7 +895,6 @@ def main():
                 file_name=f"ktuassistant{formatted}.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             )
-        
 
 
 if __name__ == "__main__":
