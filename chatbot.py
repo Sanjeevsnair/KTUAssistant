@@ -20,8 +20,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 import concurrent.futures
 import streamlit as st
-import requests
-from io import BytesIO
+import asyncio
 
 # Directory containing the PDFs
 current_file_directory = os.path.dirname(os.path.abspath(__file__))
@@ -34,7 +33,7 @@ nltk.download("punkt")
 stemmer = PorterStemmer()
 
 
-def correct_spelling_with_google_genai(text):
+async def correct_spelling_with_google_genai(text):
     try:
         model = genai.GenerativeModel(
             "gemini-1.5-flash",
@@ -111,7 +110,7 @@ api_key = load_api_key()
 genai.configure(api_key=api_key)
 
 
-def extract_text_and_images(pdf_path):
+async def extract_text_and_images(pdf_path):
     doc = fitz.open(pdf_path)
     text = ""
     images = []
@@ -189,7 +188,7 @@ def display_images(images):
     return html
 
 
-def refine_text_with_google_genai(query, result_text):
+async def refine_text_with_google_genai(query, result_text):
     try:
         model = genai.GenerativeModel(
             "gemini-1.5-flash",
@@ -289,7 +288,7 @@ def save_chat_as_word():
     return doc_bytes
 
 
-def main():
+async def main():
     st.title("KTUAssistant")
     st.text("Your personal assistant bot for engineering study materials.")
     if "step" not in st.session_state:
@@ -305,7 +304,7 @@ def main():
     if "loading" not in st.session_state:
         st.session_state.loading = False
 
-    def find_relevant_images(query, pdf_files, all_image_info):
+    async def find_relevant_images(query, pdf_files, all_image_info):
         relevant_images = []
         seen_images = set()
         query = (
@@ -775,7 +774,7 @@ def main():
         for pdf_file in pdf_files:
             pdf_path = os.path.join(subject_directory, pdf_file)
 
-            text, images = extract_text_and_images(pdf_path)
+            text, images = await extract_text_and_images(pdf_path)
 
             aggregated_text += text
             all_images.extend(images)
@@ -827,7 +826,7 @@ def main():
         # Add your text input and button
         with text_col:
             textcrt = st.text_input("Enter Your Topic Heading:", key="stTextInput")
-            user_query = correct_spelling_with_google_genai(text=textcrt)
+            user_query = await correct_spelling_with_google_genai(text=textcrt)
         with button_col:
             btn = st.button("Send", key="stButton")
         with backcol:
@@ -848,7 +847,7 @@ def main():
                 with st.spinner("Bot is processing your request..."):
                     result_text = search_text_in_pdf(user_query, aggregated_text)
                     if result_text:
-                        refined_text = refine_text_with_google_genai(
+                        refined_text = await refine_text_with_google_genai(
                             user_query, result_text
                         )
                         formatted_text = convert_latex_to_text(refined_text)
@@ -856,7 +855,7 @@ def main():
                     else:
                         response_message = "No relevant notes found."
 
-                    relevant_images = find_relevant_images(
+                    relevant_images = await find_relevant_images(
                         user_query, pdf_files, all_image_info
                     )
                     if relevant_images:
